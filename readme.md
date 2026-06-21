@@ -154,16 +154,3 @@ Mode `twoway` tidak memiliki conflict resolution canggih. File yang berubah di k
 
 ---
 
-# 📜 LICENSE
-
-MIT License
-
-```
-
---- 
-
-Kalau mau, saya bisa upgrade lagi ke:
-- :contentReference[oaicite:0]{index=0}
-- :contentReference[oaicite:1]{index=1}
-- atau :contentReference[oaicite:2]{index=2}
-```
