@@ -24,10 +24,13 @@ EOF
 cek_rsync() {
 
     command -v rsync >/dev/null 2>&1 || {
-
         echo "rsync belum terinstall"
         exit 1
+    }
 
+    command -v sshpass >/dev/null 2>&1 || {
+        echo "sshpass belum terinstall. Install dengan: apt install sshpass (Ubuntu/Debian) atau yum install sshpass (CentOS)"
+        exit 1
     }
 }
 
@@ -157,27 +160,11 @@ resolve_conflict() {
     read -p "Choose: " c
 
     case $c in
-
-        1)
-            return 1
-            ;;
-
-        2)
-            return 2
-            ;;
-
-        3)
-            return 3
-            ;;
-
-        4)
-            return 4
-            ;;
-
-        *)
-            return 4
-            ;;
-
+        1) return 1 ;;
+        2) return 2 ;;
+        3) return 3 ;;
+        4) return 4 ;;
+        *) return 4 ;;
     esac
 }
 
@@ -185,34 +172,13 @@ resolve_conflict() {
 # RSYNC OPTIONS
 ########################################
 
-# IMPORTANT:
-#
-# Tidak menggunakan -a karena -a akan membawa:
-# owner
-# group
-# permission
-# timestamp
-# symlink
-# dll.
-#
-# Kita hanya menggunakan:
-#
-# -r  recursive
-# -v  verbose
-# -h  human readable
-#
-# --no-owner
-# --no-group
-# --no-perms
-#
-# Timestamp TETAP dipertahankan agar
-# --update tetap bekerja dengan baik.
-
 RSYNC_COPY_OPTIONS=(
     -rvh
     --no-owner
     --no-group
     --no-perms
+    # Tambahan opsi agar rsync otomatis skip strict host key checking saat pakai sshpass
+    -e "ssh -o StrictHostKeyChecking=no" 
 )
 
 ########################################
@@ -224,13 +190,24 @@ sync_pair() {
     local src="$1"
     local mode="$2"
     local dst="$3"
+    local pass="$4"
 
     echo ""
     echo "======================================"
     echo "SRC : $src"
     echo "DST : $dst"
     echo "MODE: $mode"
+    if [ -n "$pass" ]; then
+        echo "PASS: Tersimpan (Menggunakan sshpass)"
+    else
+        echo "PASS: Tidak Ada / Default SSH Key"
+    fi
     echo "======================================"
+
+    local CMD_PREFIX=()
+    if [ -n "$pass" ]; then
+        CMD_PREFIX=(sshpass -p "$pass")
+    fi
 
     ####################################
     # CREATE LOCAL DESTINATION
@@ -241,15 +218,11 @@ sync_pair() {
         mkdir -p "$dst" 2>/dev/null
 
         if [ $? -ne 0 ]; then
-
             echo "ERROR: tidak bisa membuat destination:"
             echo "$dst"
-
             log "SYNC ERROR mkdir $dst"
-
             return 1
         fi
-
     fi
 
     ####################################
@@ -259,7 +232,6 @@ sync_pair() {
     case "$mode" in
 
         oneway)
-
             echo ""
             echo ">>> ONE WAY"
             echo "$src"
@@ -267,7 +239,7 @@ sync_pair() {
             echo "$dst"
             echo ""
 
-            rsync \
+            "${CMD_PREFIX[@]}" rsync \
                 "${RSYNC_COPY_OPTIONS[@]}" \
                 --progress \
                 "$src/" \
@@ -276,23 +248,13 @@ sync_pair() {
             local result=$?
 
             if [ $result -eq 0 ]; then
-
-                # Jika destination adalah local,
-                # pastikan owner mengikuti user
-                # pemilik path /home/xxx
                 fix_local_owner "$dst"
-
                 log "ONEWAY $src -> $dst"
-
             else
-
                 echo ""
                 echo "SYNC ERROR"
-
                 log "ONEWAY FAILED $src -> $dst"
-
             fi
-
             ;;
 
         ##################################
@@ -300,7 +262,6 @@ sync_pair() {
         ##################################
 
         mirror)
-
             echo ""
             echo ">>> MIRROR"
             echo "$src"
@@ -308,7 +269,7 @@ sync_pair() {
             echo "$dst"
             echo ""
 
-            rsync \
+            "${CMD_PREFIX[@]}" rsync \
                 "${RSYNC_COPY_OPTIONS[@]}" \
                 --delete \
                 --progress \
@@ -318,22 +279,13 @@ sync_pair() {
             local result=$?
 
             if [ $result -eq 0 ]; then
-
-                # Jika destination local,
-                # kembalikan ownership ke user lokal
                 fix_local_owner "$dst"
-
                 log "MIRROR $src -> $dst"
-
             else
-
                 echo ""
                 echo "MIRROR ERROR"
-
                 log "MIRROR FAILED $src -> $dst"
-
             fi
-
             ;;
 
         ##################################
@@ -341,16 +293,10 @@ sync_pair() {
         ##################################
 
         twoway)
-
             echo ""
             echo "======================================"
             echo "       TWO WAY SYNC"
             echo "======================================"
-
-            ##################################
-            # STEP 1
-            # SRC -> DST
-            ##################################
 
             echo ""
             echo "STEP 1"
@@ -359,7 +305,7 @@ sync_pair() {
             echo "$dst"
             echo ""
 
-            rsync \
+            "${CMD_PREFIX[@]}" rsync \
                 "${RSYNC_COPY_OPTIONS[@]}" \
                 --update \
                 --progress \
@@ -369,25 +315,13 @@ sync_pair() {
             local result1=$?
 
             if [ $result1 -ne 0 ]; then
-
                 echo ""
                 echo "ERROR: SRC -> DST gagal"
-
                 log "TWOWAY FAILED SRC->DST $src -> $dst"
-
                 return 1
             fi
 
-            ##################################
-            # Jika DST local
-            ##################################
-
             fix_local_owner "$dst"
-
-            ##################################
-            # STEP 2
-            # DST -> SRC
-            ##################################
 
             echo ""
             echo "STEP 2"
@@ -396,7 +330,7 @@ sync_pair() {
             echo "$src"
             echo ""
 
-            rsync \
+            "${CMD_PREFIX[@]}" rsync \
                 "${RSYNC_COPY_OPTIONS[@]}" \
                 --update \
                 --progress \
@@ -406,39 +340,21 @@ sync_pair() {
             local result2=$?
 
             if [ $result2 -ne 0 ]; then
-
                 echo ""
                 echo "ERROR: DST -> SRC gagal"
-
                 log "TWOWAY FAILED DST->SRC $dst -> $src"
-
                 return 1
             fi
 
-            ##################################
-            # Jika SRC local
-            ##################################
-
             fix_local_owner "$src"
-
-            ##################################
-            # DONE
-            ##################################
-
             log "TWOWAY $src <-> $dst"
-
             ;;
 
         *)
-
             echo "Mode tidak dikenal: $mode"
-
             log "UNKNOWN MODE $mode"
-
             return 1
-
             ;;
-
     esac
 }
 
@@ -451,11 +367,8 @@ sync_all() {
     mapfile -t lines < <(list_sync)
 
     if [ ${#lines[@]} -eq 0 ]; then
-
         echo "No sync config"
-
         pause
-
         return
     fi
 
@@ -465,42 +378,27 @@ sync_all() {
     echo "======================================"
 
     for line in "${lines[@]}"; do
-
-        # Lewati baris kosong
         [ -z "$line" ] && continue
 
         src=$(echo "$line" | cut -d'|' -f1)
         mode=$(echo "$line" | cut -d'|' -f2)
-        dst=$(echo "$line" | cut -d'|' -f3-)
-
-        ##################################
-        # VALIDASI
-        ##################################
+        dst=$(echo "$line" | cut -d'|' -f3)
+        pass=$(echo "$line" | cut -d'|' -f4-)
 
         if [ -z "$src" ] || [ -z "$mode" ] || [ -z "$dst" ]; then
-
             echo ""
-            echo "Config invalid:"
-            echo "$line"
-
+            echo "Config invalid: $line"
             log "CONFIG INVALID $line"
-
             continue
         fi
 
-        ##################################
-        # SYNC
-        ##################################
-
-        sync_pair "$src" "$mode" "$dst"
-
+        sync_pair "$src" "$mode" "$dst" "$pass"
     done
 
     echo ""
     echo "======================================"
     echo "             SYNC DONE"
     echo "======================================"
-
     pause
 }
 
@@ -516,21 +414,15 @@ add_sync() {
     read -p "Source folder: " src
 
     if [ -z "$src" ]; then
-
         echo "Source kosong"
-
         pause
-
         return
     fi
 
     if [ ! -d "$src" ]; then
-
         echo ""
         echo "WARNING:"
-        echo "Source folder tidak ada."
-        echo "Tetapi tetap boleh digunakan untuk remote/SSH."
-
+        echo "Source folder tidak ada (Abaikan jika ini remote path)."
     fi
 
     echo ""
@@ -542,54 +434,33 @@ add_sync() {
     read -p "Choose mode: " m
 
     case $m in
-
-        1)
-            mode="oneway"
-            ;;
-
-        2)
-            mode="twoway"
-            ;;
-
-        3)
-            mode="mirror"
-            ;;
-
-        *)
-            echo "invalid"
-
-            pause
-
-            return
-            ;;
-
+        1) mode="oneway" ;;
+        2) mode="twoway" ;;
+        3) mode="mirror" ;;
+        *) echo "invalid"; pause; return ;;
     esac
 
     echo ""
-
     read -p "Destination (local or user@ip:/path): " dst
 
     if [ -z "$dst" ]; then
-
         echo "Destination kosong"
-
         pause
-
         return
     fi
+    
+    echo ""
+    read -p "SSH Password (kosongkan jika local atau menggunakan SSH Key): " pass
 
     ##################################
     # VALIDASI PIPE
     ##################################
 
-    if [[ "$src" == *"|"* ]] || [[ "$dst" == *"|"* ]]; then
-
+    if [[ "$src" == *"|"* ]] || [[ "$dst" == *"|"* ]] || [[ "$pass" == *"|"* ]]; then
         echo ""
         echo "ERROR:"
-        echo "Path tidak boleh mengandung karakter |"
-
+        echo "Path atau password tidak boleh mengandung karakter |"
         pause
-
         return
     fi
 
@@ -597,19 +468,14 @@ add_sync() {
     # ADD CONFIG
     ##################################
 
-    awk -v line="$src|$mode|$dst" '
-
+    awk -v line="$src|$mode|$dst|$pass" '
     /^\[SYNC\]/ {
         print
         print line
         added=1
         next
     }
-
-    {
-        print
-    }
-
+    { print }
     ' "$CONFIG" > "$CONFIG.tmp"
 
     mv "$CONFIG.tmp" "$CONFIG"
@@ -619,7 +485,6 @@ add_sync() {
     echo "$src -> $dst [$mode]"
 
     log "CONFIG ADD $src|$mode|$dst"
-
     pause
 }
 
@@ -636,66 +501,33 @@ delete_sync() {
     mapfile -t lines < <(list_sync)
 
     if [ ${#lines[@]} -eq 0 ]; then
-
         echo "No data"
-
         pause
-
         return
     fi
 
-    ##################################
-    # DISPLAY
-    ##################################
-
     for i in "${!lines[@]}"; do
-
-        echo "$((i+1)). ${lines[$i]}"
-
+        # Jangan tampilkan password di layar saat delete
+        display_line=$(echo "${lines[$i]}" | cut -d'|' -f1-3)
+        echo "$((i+1)). $display_line"
     done
 
     echo ""
-
     read -p "Choose number to delete: " n
 
-    ##################################
-    # VALIDASI
-    ##################################
-
-    if ! [[ "$n" =~ ^[0-9]+$ ]]; then
-
+    if ! [[ "$n" =~ ^[0-9]+$ ]] || [ "$n" -lt 1 ] || [ "$n" -gt "${#lines[@]}" ]; then
         echo "Nomor tidak valid"
-
         pause
-
-        return
-    fi
-
-    if [ "$n" -lt 1 ] || [ "$n" -gt "${#lines[@]}" ]; then
-
-        echo "Nomor di luar daftar"
-
-        pause
-
         return
     fi
 
     target="${lines[$((n-1))]}"
-
-    ##################################
-    # DELETE EXACT LINE
-    ##################################
-
     grep -vF -- "$target" "$CONFIG" > "$CONFIG.tmp"
-
     mv "$CONFIG.tmp" "$CONFIG"
 
     echo ""
-    echo "DELETED:"
-    echo "$target"
-
+    echo "DELETED: $(echo "$target" | cut -d'|' -f1-3)"
     log "CONFIG DELETE $target"
-
     pause
 }
 
@@ -706,9 +538,7 @@ delete_sync() {
 manage_config() {
 
     while true; do
-
         clear
-
         echo "======================="
         echo "   CONFIG MANAGER"
         echo "======================="
@@ -721,40 +551,20 @@ manage_config() {
         read -p "Choose: " c
 
         case $c in
-
-            1)
-                add_sync
-                ;;
-
-            2)
-                delete_sync
-                ;;
-
+            1) add_sync ;;
+            2) delete_sync ;;
             3)
                 clear
-
                 echo "=== SYNC CONFIG ==="
                 echo ""
-
-                list_sync
-
+                # Sembunyikan password saat dilist
+                list_sync | cut -d'|' -f1-3 | awk -F'|' '{print $1 " -> " $3 " [" $2 "]"}'
                 echo ""
-
                 pause
                 ;;
-
-            0)
-                break
-                ;;
-
-            *)
-                echo "Invalid"
-
-                sleep 1
-                ;;
-
+            0) break ;;
+            *) echo "Invalid"; sleep 1 ;;
         esac
-
     done
 }
 
@@ -765,16 +575,12 @@ manage_config() {
 view_config() {
 
     clear
-
     echo "=============================="
     echo "          CONFIG"
     echo "=============================="
     echo ""
-
     cat "$CONFIG"
-
     echo ""
-
     pause
 }
 
@@ -785,16 +591,12 @@ view_config() {
 view_log() {
 
     clear
-
     echo "=============================="
     echo "            LOG"
     echo "=============================="
     echo ""
-
     cat "$LOGFILE"
-
     echo ""
-
     pause
 }
 
@@ -805,16 +607,14 @@ view_log() {
 menu() {
 
     while true; do
-
         clear
-
         echo "=============================="
         echo "   SIMPLE RSYNC MANAGER"
         echo "        BY WePey"
         echo "=============================="
         echo "1. Sync Now"
         echo "2. Manage Config"
-        echo "3. View Config"
+        echo "3. View Config (with passwords)"
         echo "4. View Log"
         echo "0. Exit"
         echo "=============================="
@@ -822,35 +622,13 @@ menu() {
         read -p "Choose: " p
 
         case $p in
-
-            1)
-                sync_all
-                ;;
-
-            2)
-                manage_config
-                ;;
-
-            3)
-                view_config
-                ;;
-
-            4)
-                view_log
-                ;;
-
-            0)
-                exit 0
-                ;;
-
-            *)
-                echo "Invalid"
-
-                sleep 1
-                ;;
-
+            1) sync_all ;;
+            2) manage_config ;;
+            3) view_config ;;
+            4) view_log ;;
+            0) exit 0 ;;
+            *) echo "Invalid"; sleep 1 ;;
         esac
-
     done
 }
 
@@ -859,7 +637,5 @@ menu() {
 ########################################
 
 cek_rsync
-
 init_config
-
 menu
